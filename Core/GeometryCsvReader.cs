@@ -16,9 +16,7 @@ namespace LiraMosaicViewer.Core
             using var sr = new StreamReader(geomPath, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
             // header
-
-            var header = sr.ReadLine();
-            if (header == null) return result;
+            _ = sr.ReadLine();
 
             string? line;
             while ((line = sr.ReadLine()) != null)
@@ -35,57 +33,74 @@ namespace LiraMosaicViewer.Core
                 if (!CsvParsing.TryParseInt(parts[2], out var nodesCount)) continue;
                 if (nodesCount < 3 || nodesCount > 8) continue;
 
-                var pts = new List<Point>(nodesCount);
+                // Собираем узлы: (nodeId + координаты)
+                var nodes = new List<(int nodeId, Point pt)>(nodesCount);
 
                 // Node1 начинается с индекса 7: Node;X;Y;Z -> шаг 4
                 for (int i = 1; i <= nodesCount; i++)
                 {
-                    int baseIdx = 7 + (i - 1) * 4;
+                    int baseIdx = 7 + (i - 1) * 4; // NodeId
                     int xIdx = baseIdx + 1;
                     int yIdx = baseIdx + 2;
 
-                    if (xIdx >= parts.Length || yIdx >= parts.Length) break;
+                    if (baseIdx >= parts.Length || xIdx >= parts.Length || yIdx >= parts.Length)
+                        break;
+
+                    // nodeId — best-effort (чтобы не ломать моменты при неожиданном формате)
+                    int nodeId = 0;
+                    CsvParsing.TryParseInt(parts[baseIdx], out nodeId);
 
                     if (!CsvParsing.TryParseDouble(parts[xIdx], out var x)) break;
                     if (!CsvParsing.TryParseDouble(parts[yIdx], out var y)) break;
 
-                    pts.Add(new Point(x, y));
+                    nodes.Add((nodeId, new Point(x, y)));
                 }
 
                 // Если недобрали точки — пропускаем элемент (не падаем)
-                if (pts.Count < 3) continue;
+                if (nodes.Count < 3) continue;
 
-                // Простейшая защита от дубликата
+                // Упорядочиваем по углу (как раньше), но сохраняем и NodeIds в том же порядке
+                var orderedPts = OrderByAngle(nodes, out var orderedNodeIds);
+
                 result[elementId] = new Element2D
                 {
                     ElementId = elementId,
-                    Points = OrderByAngle(pts)
-
+                    Points = orderedPts,
+                    NodeIds = orderedNodeIds
                 };
             }
 
             return result;
         }
-        private static Point[] OrderByAngle(List<Point> pts)
+
+        private static Point[] OrderByAngle(List<(int nodeId, Point pt)> nodes, out int[] nodeIds)
         {
             double cx = 0, cy = 0;
-            for (int i = 0; i < pts.Count; i++)
+            for (int i = 0; i < nodes.Count; i++)
             {
-                cx += pts[i].X;
-                cy += pts[i].Y;
+                cx += nodes[i].pt.X;
+                cy += nodes[i].pt.Y;
             }
-            cx /= pts.Count;
-            cy /= pts.Count;
+            cx /= nodes.Count;
+            cy /= nodes.Count;
 
-            pts.Sort((a, b) =>
+            nodes.Sort((a, b) =>
             {
-                double aa = Math.Atan2(a.Y - cy, a.X - cx);
-                double bb = Math.Atan2(b.Y - cy, b.X - cx);
+                double aa = Math.Atan2(a.pt.Y - cy, a.pt.X - cx);
+                double bb = Math.Atan2(b.pt.Y - cy, b.pt.X - cx);
                 return aa.CompareTo(bb);
             });
 
-            return pts.ToArray();
-        }
+            var pts = new Point[nodes.Count];
+            nodeIds = new int[nodes.Count];
 
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                pts[i] = nodes[i].pt;
+                nodeIds[i] = nodes[i].nodeId;
+            }
+
+            return pts;
+        }
     }
 }

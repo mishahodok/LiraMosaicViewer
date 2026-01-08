@@ -1,16 +1,15 @@
 ﻿using LiraMosaicViewer.Models;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Windows;
-using LiraMosaicViewer.Core; // если не видит DisplacementsCsvReader (обычно не нужно)
-
 
 namespace LiraMosaicViewer.Core
 {
     public sealed class MosaicSceneBuilder
     {
-
+        /// <summary>
+        /// Текущий режим (как было): значения заданы ПО ЭЛЕМЕНТАМ (moments Mx/My/Mxy и т.п.)
+        /// </summary>
         public MosaicScene? Build(
             string baseName,
             string geomPath,
@@ -20,9 +19,75 @@ namespace LiraMosaicViewer.Core
             Dictionary<int, Element2D> geometryByElement,
             Dictionary<int, double> valuesByElement)
         {
+            _ = geomPath;
+            _ = momentsPath;
+
+            string titleRight = $"Мозаика напряжений по {field} | LC={lc}";
+            return BuildCore(baseName, titleRight, geometryByElement, valuesByElement);
+        }
+
+        /// <summary>
+        /// Новый режим (для перемещений): значения заданы ПО УЗЛАМ (nodeId -> value),
+        /// а цвет элемента считаем как среднее по его узлам (NodeIds).
+        /// </summary>
+        public MosaicScene? BuildFromNodeValues(
+            string baseName,
+            string geomPath,
+            string displacementsPath,
+            int rsn,
+            string fieldName, // "Ux" / "Uy" / "Uz" — только для подписи справа
+            Dictionary<int, Element2D> geometryByElement,
+            IReadOnlyDictionary<int, double> valuesByNode)
+        {
+            _ = geomPath;
+            _ = displacementsPath;
+
+            // Пересчёт узловых значений в элементные (1 цвет на элемент)
+            var valuesByElement = new Dictionary<int, double>(geometryByElement.Count);
+
+            foreach (var kvp in geometryByElement)
+            {
+                int elementId = kvp.Key;
+                var el = kvp.Value;
+
+                if (el.Points == null || el.Points.Length < 3)
+                    continue;
+
+                if (el.NodeIds == null || el.NodeIds.Length < 3)
+                    continue; // нет узлов — не можем посчитать элементное значение
+
+                double sum = 0;
+                int cnt = 0;
+
+                for (int i = 0; i < el.NodeIds.Length; i++)
+                {
+                    int nodeId = el.NodeIds[i];
+                    if (valuesByNode.TryGetValue(nodeId, out var v))
+                    {
+                        sum += v;
+                        cnt++;
+                    }
+                }
+
+                if (cnt == 0)
+                    continue; // ни одного узла с данными
+
+                valuesByElement[elementId] = sum / cnt;
+            }
+
+            string titleRight = $"Изополя относительных перемещений по {fieldName} | РСН={rsn}";
+            return BuildCore(baseName, titleRight, geometryByElement, valuesByElement);
+        }
+
+        private static MosaicScene? BuildCore(
+            string baseName,
+            string titleRight,
+            Dictionary<int, Element2D> geometryByElement,
+            IReadOnlyDictionary<int, double> valuesByElement)
+        {
             // Собираем только те элементы, у которых есть и геометрия, и значение
             var elements = new List<Element2D>(geometryByElement.Count);
-            var values = new List<double>();
+            var values = new List<double>(geometryByElement.Count);
 
             Rect? bounds = null;
 
@@ -34,13 +99,15 @@ namespace LiraMosaicViewer.Core
                     continue; // нет значения — не рисуем
 
                 var el = kvp.Value;
-                if (el.Points.Length < 3) continue;
+                if (el.Points == null || el.Points.Length < 3)
+                    continue;
 
                 // Валидация координат (на всякий)
                 bool ok = true;
                 foreach (var p in el.Points)
                 {
-                    if (double.IsNaN(p.X) || double.IsNaN(p.Y) || double.IsInfinity(p.X) || double.IsInfinity(p.Y))
+                    if (double.IsNaN(p.X) || double.IsNaN(p.Y) ||
+                        double.IsInfinity(p.X) || double.IsInfinity(p.Y))
                     {
                         ok = false;
                         break;
@@ -67,7 +134,7 @@ namespace LiraMosaicViewer.Core
             for (int i = 0; i < elements.Count; i++)
             {
                 int id = elements[i].ElementId;
-                double v = valuesByElement[id];
+                double v = values[i]; // важно: берём из списка, чтобы не зависеть от словаря
                 int bin = LegendBuilder.GetBinIndex(v, legend.Min, legend.Max, legend.BinCount);
                 elementToBin[id] = bin;
             }
@@ -75,7 +142,7 @@ namespace LiraMosaicViewer.Core
             return new MosaicScene
             {
                 TitleLeft = baseName,
-                TitleRight = $"Мозаика напряжений по {field} | LC={lc}",
+                TitleRight = titleRight,
                 Elements = elements,
                 ElementToBin = elementToBin,
                 WorldBounds = bounds.Value,

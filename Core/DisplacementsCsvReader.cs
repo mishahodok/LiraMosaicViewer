@@ -64,8 +64,9 @@ namespace LiraMosaicViewer.Core
                     continue;
                 }
 
-                var parts = CsvParsing.SplitCsvLine(line);
-                if (parts.Count < 6) continue;
+                var parts = line.Split(';');          // у тебя CSV из Excel — разделитель ; 
+                if (parts.Length < 6) continue;
+
 
                 if (!CsvParsing.TryParseInt(parts[0], out var nodeId)) continue;
                 if (!CsvParsing.TryParseInt(parts[1], out var rsn)) continue;

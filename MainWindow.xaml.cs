@@ -132,7 +132,8 @@ namespace LiraMosaicViewer
                 var field = (MomentField)(FieldComboBox.SelectedItem ?? MomentField.My);
 
                 var geom = GeometryCsvReader.ReadElements(pair.GeomPath);
-                var momentsTable = MomentsCsvReader.ReadTables(pair.MomentsPaths);
+                var momentsTable = MomentsCsvReader.ReadTables(pair.EnumerateMomentsPaths());
+
 
                 var selectedLcItem = LoadCaseComboBox.SelectedItem as LoadCaseItem;
                 int lc = selectedLcItem?.Lc ?? 0;
@@ -631,7 +632,8 @@ namespace LiraMosaicViewer
             if (_momentsCache.TryGetValue(pair.BaseName, out var cached))
                 return cached;
 
-            var table = MomentsCsvReader.ReadTables(pair.MomentsPaths);
+            var table = MomentsCsvReader.ReadTables(pair.EnumerateMomentsPaths());
+
             _momentsCache[pair.BaseName] = table;
             return table;
         }
