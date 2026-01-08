@@ -39,6 +39,30 @@ namespace LiraMosaicViewer.Core
             };
             return true;
         }
+
+        public Dictionary<int, double> GetValuesByNode(int rsn, DisplacementField field)
+        {
+            var result = new Dictionary<int, double>();
+
+            if (!_data.TryGetValue(rsn, out var map))
+                return result;
+
+            foreach (var kvp in map)
+            {
+                var (ux, uy, uz) = kvp.Value;
+                double v = field switch
+                {
+                    DisplacementField.Ux => ux,
+                    DisplacementField.Uy => uy,
+                    DisplacementField.Uz => uz,
+                    _ => uz
+                };
+
+                result[kvp.Key] = v;
+            }
+
+            return result;
+        }
     }
 
     public static class DisplacementsCsvReader

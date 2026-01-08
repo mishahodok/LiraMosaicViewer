@@ -30,6 +30,8 @@ namespace LiraMosaicViewer
         private bool _exportRunning = false;
         private CancellationTokenSource? _exportCts;
 
+        private bool _suppressRsnSelectionChanged = false;
+
 
         public MainWindow()
         {
@@ -99,7 +101,10 @@ namespace LiraMosaicViewer
         }
 
         private void PairsListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-            => LoadSelectedPairAndRender();
+        {
+            UpdateRsnListForSelectedPair();
+            LoadSelectedPairAndRender();
+        }
 
         private void Field_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
             => LoadSelectedPairAndRender();
@@ -113,9 +118,45 @@ namespace LiraMosaicViewer
             ReportView.InvalidateVisual();
         }
 
+        private void UpdateRsnListForSelectedPair()
+        {
+            var pair = PairsListBox.SelectedItem as FilePairItem;
+            if (pair == null)
+            {
+                _suppressRsnSelectionChanged = true;
+                try
+                {
+                    RsnComboBox.ItemsSource = Array.Empty<int>();
+                    RsnComboBox.SelectedItem = null;
+                }
+                finally { _suppressRsnSelectionChanged = false; }
+                return;
+            }
+
+            var rsns = pair.DisplacementsByRsn.Keys.OrderBy(x => x).ToList();
+            int? keep = RsnComboBox.SelectedItem is int k ? k : (int?)null;
+
+            _suppressRsnSelectionChanged = true;
+            try
+            {
+                RsnComboBox.ItemsSource = rsns;
+
+                if (rsns.Count == 0)
+                {
+                    RsnComboBox.SelectedItem = null;
+                    return;
+                }
+
+                if (keep.HasValue && rsns.Contains(keep.Value))
+                    RsnComboBox.SelectedItem = keep.Value;
+                else
+                    RsnComboBox.SelectedItem = rsns[0];
+            }
+            finally { _suppressRsnSelectionChanged = false; }
+        }
+
         private void LoadSelectedPairAndRender()
         {
-
             try
             {
                 StatusTextBlock.Text = "";
@@ -128,10 +169,16 @@ namespace LiraMosaicViewer
                     return;
                 }
 
+                // Геометрия нужна в обоих режимах
+                var geom = GeometryCsvReader.ReadElements(pair.GeomPath);
+
+                if (IsDisplacementsMode)
+                {
+                    RenderDisplacements(pair, geom);
+                    return;
+                }
 
                 var field = (MomentField)(FieldComboBox.SelectedItem ?? MomentField.My);
-
-                var geom = GeometryCsvReader.ReadElements(pair.GeomPath);
                 var momentsTable = MomentsCsvReader.ReadTables(pair.EnumerateMomentsPaths());
 
 
@@ -207,6 +254,99 @@ namespace LiraMosaicViewer
             }
         }
 
+        private void RenderDisplacements(FilePairItem pair, Dictionary<int, Element2D> geom)
+        {
+            var field = (DisplacementField)(FieldComboBox.SelectedItem ?? DisplacementField.Uz);
+
+            // RSN: если ещё не выбран — пробуем взять первый доступный
+            int rsn = RsnComboBox.SelectedItem is int i ? i : 0;
+            if (rsn == 0 && pair.DisplacementsByRsn.Count > 0)
+            {
+                rsn = pair.DisplacementsByRsn.Keys.OrderBy(x => x).First();
+                _suppressRsnSelectionChanged = true;
+                try { RsnComboBox.SelectedItem = rsn; }
+                finally { _suppressRsnSelectionChanged = false; }
+            }
+
+            // Нет файлов перемещений для этой плиты
+            if (pair.DisplacementsByRsn.Count == 0)
+            {
+                ReportView.Scene = null;
+                ReportView.Page = new ReportPageModel
+                {
+                    LoadTitle = "РСН —",
+                    MosaicTitle = $"Изополя относительных перемещений по {field}",
+                    UnitsTitle = "Единицы измерения - м",
+                    FigureCaption = "Рис. 1 ...",
+                    SheetNumber = "1",
+                    NoDataText = "Нет данных в таблице"
+                };
+                ReportView.ShowMesh = MeshCheckBox.IsChecked == true;
+                ReportView.InvalidateVisual();
+                StatusTextBlock.Text = "Для выбранной плиты не найдено файлов перемещений (plates_*_displacements_rsn*.csv).";
+                return;
+            }
+
+            if (rsn == 0 || !pair.DisplacementsByRsn.TryGetValue(rsn, out var dispPath) || string.IsNullOrWhiteSpace(dispPath))
+            {
+                ReportView.Scene = null;
+                ReportView.Page = new ReportPageModel
+                {
+                    LoadTitle = rsn == 0 ? "РСН —" : $"РСН {rsn}",
+                    MosaicTitle = $"Изополя относительных перемещений по {field}",
+                    UnitsTitle = "Единицы измерения - м",
+                    FigureCaption = "Рис. 1 ...",
+                    SheetNumber = "1",
+                    NoDataText = "Нет данных в таблице"
+                };
+                ReportView.ShowMesh = MeshCheckBox.IsChecked == true;
+                ReportView.InvalidateVisual();
+                StatusTextBlock.Text = rsn == 0 ? "Не выбран РСН." : $"Не найден файл перемещений для РСН={rsn}.";
+                return;
+            }
+
+            var dispTable = DisplacementsCsvReader.ReadTable(dispPath);
+            if (dispTable.AvailableRsns.Count == 0 || !dispTable.AvailableRsns.Contains(rsn))
+            {
+                ReportView.Scene = null;
+                ReportView.Page = new ReportPageModel
+                {
+                    LoadTitle = $"РСН {rsn}",
+                    MosaicTitle = $"Изополя относительных перемещений по {field}",
+                    UnitsTitle = "Единицы измерения - м",
+                    FigureCaption = "Рис. 1 ...",
+                    SheetNumber = "1",
+                    NoDataText = "Нет данных в таблице"
+                };
+                ReportView.ShowMesh = MeshCheckBox.IsChecked == true;
+                ReportView.InvalidateVisual();
+                StatusTextBlock.Text = $"РСН={rsn}, {field} | нет данных в таблице перемещений";
+                return;
+            }
+
+            var valuesByNode = dispTable.GetValuesByNode(rsn, field);
+            var scene = _sceneBuilder.BuildFromNodeValues(pair.BaseName, pair.GeomPath, dispPath, rsn, field.ToString(), geom, valuesByNode);
+
+            ReportView.Scene = scene;
+            ReportView.ShowMesh = MeshCheckBox.IsChecked == true;
+
+            ReportView.Page = new ReportPageModel
+            {
+                LoadTitle = $"РСН {rsn}",
+                MosaicTitle = $"Изополя относительных перемещений по {field}",
+                UnitsTitle = "Единицы измерения - м",
+                FigureCaption = "Рис. 1 ...",
+                SheetNumber = "1",
+                NoDataText = scene == null ? "Нет данных в таблице" : ""
+            };
+
+            ReportView.InvalidateVisual();
+
+            StatusTextBlock.Text = scene == null
+                ? $"РСН={rsn}, {field} | геом.: {geom.Count}, узлов: {valuesByNode.Count}, нет данных для отображения"
+                : $"РСН={rsn}, {field} | геом.: {geom.Count}, узлов: {valuesByNode.Count}, нарисовано: {scene.RenderedElementCount}";
+        }
+
         private void LoadLoadCases(string folder)
         {
             try
@@ -247,6 +387,10 @@ namespace LiraMosaicViewer
 
             // RSN активен только для перемещений
             RsnComboBox.IsEnabled = IsDisplacementsMode;
+
+            // Очередь/экспорт пока реализованы только для моментов
+            AddCurrentButton.IsEnabled = !IsDisplacementsMode;
+            AddAllLcButton.IsEnabled = !IsDisplacementsMode;
         }
 
         private void RebindFieldComboForReport()
@@ -268,11 +412,13 @@ namespace LiraMosaicViewer
         {
             RebindFieldComboForReport();
             SetReportModeUi();
+            UpdateRsnListForSelectedPair();
             LoadSelectedPairAndRender();
         }
 
         private void Rsn_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
+            if (_suppressRsnSelectionChanged) return;
             if (IsDisplacementsMode)
                 LoadSelectedPairAndRender();
         }
