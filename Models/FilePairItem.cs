@@ -6,6 +6,8 @@ namespace LiraMosaicViewer.Models
     public sealed class FilePairItem
     {
         public string BaseName { get; set; } = "";
+        public string DisplayName => BaseName;
+
         public string GeomPath { get; set; } = "";
 
         // Старый режим (если вдруг где-то остался один файл моментов на плиту)
